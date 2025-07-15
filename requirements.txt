@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+joblib
+gtts
+pydub
+numpy
+opencv-python
+scikit-learn
+tqdm
+librosa
+python-multipart
