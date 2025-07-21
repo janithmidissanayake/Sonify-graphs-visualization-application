@@ -12,6 +12,8 @@ from scipy.integrate import trapezoid
 from numpy.polynomial import Polynomial
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
+import traceback
+
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -83,12 +85,31 @@ def generate_intro_tts(text, filename):
     tts.save(filename)
 
 def add_chimes(audio, intercepts, duration_ms, base_gain=0):
+    """
+    Overlays soft chime sounds at positions of x and y intercepts in the audio.
+
+    Parameters:
+    - audio (AudioSegment): The graph sonification audio.
+    - intercepts (tuple): Tuple of (x_intercept, y_intercept).
+    - duration_ms (int): Total duration of the audio in milliseconds.
+    - base_gain (float): The base gain applied to the graph audio; used to adjust chime loudness.
+
+    Returns:
+    - AudioSegment: The final audio with softer chimes overlaid.
+    """
     chime_overlay = audio
-    boost = max(0, -base_gain) + 4
-    if intercepts[0]:
-        chime_overlay = chime_overlay.overlay(generate_chime('x').apply_gain(boost), position=int(duration_ms*0.45))
-    if intercepts[1]:
-        chime_overlay = chime_overlay.overlay(generate_chime('y').apply_gain(boost), position=int(duration_ms*0.05))
+
+    # Reduce chime loudness to make it less harsh (e.g., -10 dB softer than base)
+    chime_gain = -15  # Fixed soft chime volume (you can adjust to -12 or -15)
+
+    # if intercepts[0]:  # x-intercept
+    #     x_chime = generate_chime('x').apply_gain(chime_gain)
+    #     chime_overlay = chime_overlay.overlay(x_chime, position=int(duration_ms * 0.45))
+
+    if intercepts[1]:  # y-intercept
+        y_chime = generate_chime('y').apply_gain(chime_gain)
+        chime_overlay = chime_overlay.overlay(y_chime, position=int(duration_ms * 0.05))
+
     return chime_overlay
 
 def predict_trend(features, graph_type):
@@ -139,6 +160,7 @@ def process_graph_file(img_path, output_dir):
     trend = predict_trend(features, graph_type)
     x_intercept, y_intercept = detect_intercepts(pts, graph_type)
 
+    # Select appropriate graph audio
     if trend == "concave_up":
         audio_path = manual_wav_path_up
     elif trend == "concave_down":
@@ -150,28 +172,37 @@ def process_graph_file(img_path, output_dir):
     else:
         raise ValueError("Unsupported trend")
 
+    # Load and adjust graph audio
     graph_audio = AudioSegment.from_file(audio_path)
     abs_slope = abs(slope)
     min_slope, max_slope = 0.001, 0.1
     gain = -25 if abs_slope <= min_slope else 8 if abs_slope >= max_slope else -25 + ((abs_slope - min_slope) / (max_slope - min_slope)) * (8 + 25)
     graph_audio = graph_audio.apply_gain(gain)
 
-    final_audio = add_chimes(graph_audio, (x_intercept, y_intercept), len(graph_audio), gain)
+    # Add chimes
+    graph_audio_with_chimes = add_chimes(graph_audio, (x_intercept, y_intercept), len(graph_audio), gain)
 
-    intro_text = f"Graph {os.path.basename(img_path)}. This is a {graph_type} graph. It is {trend}."
+    # Save graph audio
+    base_name = os.path.splitext(os.path.basename(img_path))[0]
+    graph_audio_filename = f"graph_{base_name}.wav"
+    graph_audio_path = os.path.join(output_dir, graph_audio_filename)
+    graph_audio_with_chimes.export(graph_audio_path, format="wav")
+
+    # Generate voice description
+    intro_text = f"Graph {base_name}. This is a {graph_type} graph. It is {trend}."
     if y_intercept:
         intro_text += f" It crosses the y-axis at approximately y = {y_intercept[1]:.1f}."
     if x_intercept:
         intro_text += f" It crosses the x-axis at approximately x = {x_intercept:.1f}."
 
-    tts_filename = os.path.join(output_dir, "tts_temp.mp3")
-    generate_intro_tts(intro_text, tts_filename)
-    tts_audio = AudioSegment.from_file(tts_filename).apply_gain(-6)
-    os.remove(tts_filename)
+    tts_filename = f"tts_{base_name}.mp3"
+    tts_path = os.path.join(output_dir, tts_filename)
+    generate_intro_tts(intro_text, tts_path)
 
-    final_audio += tts_audio
-    output_filename = f"sonified_{os.path.basename(img_path).split('.')[0]}.wav"
-    output_path = os.path.join(output_dir, output_filename)
-    final_audio.export(output_path, format="wav")
-
-    return output_filename, {"trend": trend, "graph_type": graph_type, "x_intercept": x_intercept, "y_intercept": y_intercept}
+    # ✅ Final return: paths tuple + metadata dict
+    return (graph_audio_path, tts_path), {
+        "trend": trend,
+        "graph_type": graph_type,
+        "x_intercept": x_intercept,
+        "y_intercept": y_intercept
+    }
