@@ -1,6 +1,5 @@
 import os
 import cv2
-import json
 import numpy as np
 import joblib
 import warnings
@@ -12,8 +11,6 @@ from scipy.integrate import trapezoid
 from numpy.polynomial import Polynomial
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
-import traceback
-
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -24,6 +21,7 @@ manual_wav_path_up = os.path.join("static", "concave_up.wav")
 manual_wav_path_down = os.path.join("static", "concave_down.wav")
 manual_wav_path_linear_up = os.path.join("static", "y_equals_x_increasing.wav")
 manual_wav_path_linear_down = os.path.join("static", "y_equals_neg_x_decreasing.wav")
+
 
 def enhance_graph_image(image_path):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
@@ -37,6 +35,7 @@ def enhance_graph_image(image_path):
     skeleton = morph > 0
     return np.uint8(skeleton) * 255, 128
 
+
 def extract_graph_points(skel_img, x_axis_row):
     points = np.column_stack(np.where(skel_img > 0))[:, [1, 0]]
     points = points[points[:, 0].argsort()].astype(np.float64)
@@ -45,14 +44,17 @@ def extract_graph_points(skel_img, x_axis_row):
     points[:, 1] = (points[:, 1] / y_range) * 128
     return points
 
+
 def normalize_points(points):
     return np.flip(points, axis=0) if points[0][0] > points[-1][0] else points
+
 
 def apply_savgol(points):
     if len(points) >= 11:
         y_smooth = savgol_filter(points[:, 1], 11, 2)
         return np.column_stack((points[:, 0], y_smooth))
     return points
+
 
 def detect_intercepts(points, graph_type):
     x, y = points[:, 0], points[:, 1]
@@ -76,41 +78,25 @@ def detect_intercepts(points, graph_type):
     except:
         return None, None
 
+
 def generate_chime(intercept_type):
     freq = 1200 if intercept_type == 'x' else 1500
     return Sine(freq).to_audio_segment(duration=200)
 
-def generate_intro_tts(text, filename):
-    tts = gTTS(text)
+
+def generate_intro_tts(text, filename, lang="si"):
+    tts = gTTS(text=text, lang=lang)
     tts.save(filename)
 
+
 def add_chimes(audio, intercepts, duration_ms, base_gain=0):
-    """
-    Overlays soft chime sounds at positions of x and y intercepts in the audio.
-
-    Parameters:
-    - audio (AudioSegment): The graph sonification audio.
-    - intercepts (tuple): Tuple of (x_intercept, y_intercept).
-    - duration_ms (int): Total duration of the audio in milliseconds.
-    - base_gain (float): The base gain applied to the graph audio; used to adjust chime loudness.
-
-    Returns:
-    - AudioSegment: The final audio with softer chimes overlaid.
-    """
     chime_overlay = audio
-
-    # Reduce chime loudness to make it less harsh (e.g., -10 dB softer than base)
-    chime_gain = -15  # Fixed soft chime volume (you can adjust to -12 or -15)
-
-    # if intercepts[0]:  # x-intercept
-    #     x_chime = generate_chime('x').apply_gain(chime_gain)
-    #     chime_overlay = chime_overlay.overlay(x_chime, position=int(duration_ms * 0.45))
-
-    if intercepts[1]:  # y-intercept
+    chime_gain = -15
+    if intercepts[1]:
         y_chime = generate_chime('y').apply_gain(chime_gain)
         chime_overlay = chime_overlay.overlay(y_chime, position=int(duration_ms * 0.05))
-
     return chime_overlay
+
 
 def predict_trend(features, graph_type):
     if graph_type == "linear":
@@ -120,6 +106,46 @@ def predict_trend(features, graph_type):
         sample = [features.get(k, 0.0) for k in ["slope", "second_derivative", "r2", "enclosed_area", "vertex_y", "edge_avg_y"]]
         return "concave_up" if square_model.predict([sample])[0] == 1 else "concave_down"
     return "unknown"
+
+
+def translate_to_sinhala(graph_type, trend, x_intercept, y_intercept, base_name, vertex=None):
+    vertex_part = ""
+    intercept_part = ""
+    if vertex:
+        vx, vy = vertex
+        vertex_part = f"x = {vx:.1f} හා y = {vy:.1f}"
+
+    if y_intercept:
+        intercept_part = f"y ≈ {y_intercept[1]:.1f}"
+
+    if graph_type == "square":
+        if trend == "concave_up":
+            return (
+                f"{base_name} වර්ගජ ශ්‍රිත ප්‍රස්තාරයකි. "
+                f"මෙය සීග්‍රයෙන් අඩුවෙමින් ගොස් කණ්ඩාංක අගය {vertex_part} හිදී අවම අගයකට පැමිණේ. "
+                f"මෙය අවම අගයක් සහිත් වක්‍ර ප්‍රස්තාරයකි. "
+                f"{intercept_part} y අක්ශය කපා යයි, එය මෙම ප්‍රස්තාරයේ අන්තඃකණ්ඩයයි."
+            )
+        elif trend == "concave_down":
+            return (
+                f"{base_name} වර්ගජ ශ්‍රිත ප්‍රස්තාරයකි. "
+                f"මෙය වැඩිවෙමින් ගොස් කණ්ඩාංක අගය {vertex_part} හිදී උපරිමයට පැමිණ අඩුවෙමින් යන උපරිම අගයක් සහිත වක්‍ර ප්‍රස්තාරයකි. "
+                f"{intercept_part} y අක්ශය කපා යයි, එය මෙම ප්‍රස්තාරයේ අන්තඃකණ්ඩයයි."
+            )
+    elif graph_type == "linear":
+        if trend == "increasing":
+            return (
+                f"{base_name} සරල රේඛීය ප්‍රස්තාරයකි. "
+                f"ඒකාකාරව වැඩිවෙමින් යයි. "
+                f"{intercept_part} y අක්ශය කපා යයි, එය මෙම ප්‍රස්තාරයේ අන්තඃකණ්ඩයයි."
+            )
+        elif trend == "decreasing":
+            return (
+                f"{base_name} සරල රේඛීය ප්‍රස්තාරයකි. "
+                f"ඒකාකාරව අඩුවෙමින් යයි. "
+                f"{intercept_part} y අක්ශය කපා යයි, එය මෙම ප්‍රස්තාරයේ අන්තඃකණ්ඩයයි."
+            )
+    return f"{base_name} ප්‍රස්තාරය. විශේෂාංග අනාවරණය කළ නොහැක."
 
 def process_graph_file(img_path, output_dir):
     skel_img, x_row = enhance_graph_image(img_path)
@@ -132,7 +158,7 @@ def process_graph_file(img_path, output_dir):
     reg = LinearRegression().fit(x.reshape(-1, 1), y)
     slope = float(reg.coef_[0])
     enclosed_area = float(trapezoid(y, x))
-    vertex_y, edge_avg_y = 0.0, 0.0
+    vertex_x, vertex_y, edge_avg_y = None, 0.0, 0.0
 
     if graph_type == "square" and len(pts) >= 15:
         p = Polynomial.fit(x, y, 2).convert()
@@ -160,7 +186,6 @@ def process_graph_file(img_path, output_dir):
     trend = predict_trend(features, graph_type)
     x_intercept, y_intercept = detect_intercepts(pts, graph_type)
 
-    # Select appropriate graph audio
     if trend == "concave_up":
         audio_path = manual_wav_path_up
     elif trend == "concave_down":
@@ -172,37 +197,31 @@ def process_graph_file(img_path, output_dir):
     else:
         raise ValueError("Unsupported trend")
 
-    # Load and adjust graph audio
     graph_audio = AudioSegment.from_file(audio_path)
     abs_slope = abs(slope)
     min_slope, max_slope = 0.001, 0.1
     gain = -25 if abs_slope <= min_slope else 8 if abs_slope >= max_slope else -25 + ((abs_slope - min_slope) / (max_slope - min_slope)) * (8 + 25)
     graph_audio = graph_audio.apply_gain(gain)
-
-    # Add chimes
     graph_audio_with_chimes = add_chimes(graph_audio, (x_intercept, y_intercept), len(graph_audio), gain)
 
-    # Save graph audio
     base_name = os.path.splitext(os.path.basename(img_path))[0]
     graph_audio_filename = f"graph_{base_name}.wav"
     graph_audio_path = os.path.join(output_dir, graph_audio_filename)
     graph_audio_with_chimes.export(graph_audio_path, format="wav")
 
-    # Generate voice description
-    intro_text = f"Graph {base_name}. This is a {graph_type} graph. It is {trend}."
-    if y_intercept:
-        intro_text += f" It crosses the y-axis at approximately y = {y_intercept[1]:.1f}."
-    if x_intercept:
-        intro_text += f" It crosses the x-axis at approximately x = {x_intercept:.1f}."
-
+    sinhala_text = translate_to_sinhala(
+        graph_type, trend, x_intercept, y_intercept, base_name,
+        vertex=(vertex_x, vertex_y) if graph_type == "square" else None
+    )
     tts_filename = f"tts_{base_name}.mp3"
     tts_path = os.path.join(output_dir, tts_filename)
-    generate_intro_tts(intro_text, tts_path)
+    generate_intro_tts(sinhala_text, tts_path, lang="si")
 
-    # ✅ Final return: paths tuple + metadata dict
     return (graph_audio_path, tts_path), {
         "trend": trend,
         "graph_type": graph_type,
         "x_intercept": x_intercept,
-        "y_intercept": y_intercept
+        "y_intercept": y_intercept,
+        "vertex": (vertex_x, vertex_y) if graph_type == "square" else None,
+        "tts_sinhala_text": sinhala_text
     }
